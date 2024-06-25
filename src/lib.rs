@@ -12,8 +12,11 @@ use flate2::{write::GzEncoder, Compression};
 use log::{debug, error, info};
 use serde::{Deserialize, Serialize};
 use serde_json::{self};
+use signal_hook::flag;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::sync::Mutex;
 use std::{fs, time};
 use thiserror::Error;
@@ -244,7 +247,14 @@ impl PerformanceData {
             },
             SetTimeFlags::Default,
         );
-        while current <= end {
+
+        let term = Arc::new(AtomicBool::new(false));
+        flag::register(signal_hook::consts::SIGINT, Arc::clone(&term))?;
+        flag::register(signal_hook::consts::SIGTERM, Arc::clone(&term))?;
+        flag::register(signal_hook::consts::SIGABRT, Arc::clone(&term))?;
+        flag::register(signal_hook::consts::SIGQUIT, Arc::clone(&term))?;
+
+        while current <= end && !term.load(Ordering::Relaxed) {
             aperf_collect_data.time = TimeEnum::DateTime(Utc::now());
             aperf_collect_data.data = HashMap::new();
             let ret = tfd.read();
