@@ -3,7 +3,8 @@ use anyhow::Result;
 use clap::Args;
 use log::{debug, error, info};
 use std::os::unix::fs::PermissionsExt;
-use std::{fs, process};
+use std::fs;
+use tempfile::Builder;
 
 pub static APERF_TMP: &str = "/tmp/aperf_tmp";
 
@@ -28,6 +29,10 @@ pub struct Record {
     /// Profile JVMs using async-profiler. Specify args using comma separated values. Profiles all JVMs if no args are provided.
     #[clap(long, value_parser, default_missing_value = Some("jps"), value_names = &["PID/Name>,<PID/Name>,...,<PID/Name"], num_args = 0..=1)]
     pub profile_java: Option<String>,
+
+    /// Specify temporary directory path. Defaults to $TMPDIR.
+    #[clap(long, value_parser, value_names = &["PATH"], num_args = 1)]
+    pub tmp_path: Option<String>,
 }
 
 fn prepare_data_collectors() -> Result<()> {
@@ -65,7 +70,14 @@ pub fn record(record: &Record) -> Result<()> {
     let mut params = InitParams::new(run_name);
     params.period = record.period;
     params.interval = record.interval;
-    params.tmp_dir = APERF_TMP.to_string();
+
+    let all_read_write = std::fs::Permissions::from_mode(0o1777);
+    let tmp_dir = match &record.tmp_path {
+        Some(p) => Builder::new().prefix("aperf-tmp-").tempdir_in(p)?,
+        _ => Builder::new().prefix("aperf-tmp-").tempdir()?,
+    };
+    fs::set_permissions(tmp_dir.path(), all_read_write)?;
+    params.tmp_dir = format!("{}",tmp_dir.path().display());
 
     match &record.profile_java {
         Some(j) => {
@@ -87,15 +99,6 @@ pub fn record(record: &Record) -> Result<()> {
         );
     }
 
-    fs::remove_dir_all(APERF_TMP).ok();
-    if let Err(e) = fs::create_dir(APERF_TMP) {
-        error!("Could not create /tmp/aperf_tmp folder.\n{}: Remove using 'sudo rm -rf /tmp/aperf_tmp'.", e);
-        process::exit(1);
-    }
-    let mut perms: fs::Permissions = fs::metadata(APERF_TMP)?.permissions();
-    perms.set_mode(0o777);
-    fs::set_permissions(APERF_TMP, perms)?;
-
     PERFORMANCE_DATA.lock().unwrap().set_params(params);
     PERFORMANCE_DATA.lock().unwrap().init_collectors()?;
     info!("Starting Data collection...");
@@ -104,6 +107,5 @@ pub fn record(record: &Record) -> Result<()> {
     start_collection_serial()?;
     info!("Data collection complete.");
 
-    fs::remove_dir_all(APERF_TMP)?;
     Ok(())
 }
